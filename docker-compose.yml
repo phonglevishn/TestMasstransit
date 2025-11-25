@@ -1,0 +1,195 @@
+services:
+    haproxy:
+        build:
+            context: ./haproxy
+            dockerfile: Dockerfile
+        container_name: haproxy
+        hostname: haproxy
+        depends_on:
+            - rabbitmq1
+            - rabbitmq2
+            - rabbitmq3
+            - redis1
+            - redis2
+            - redis3
+            - signalr1
+            - signalr2
+        ports:
+            - "1936:1936"
+            - "5672:5672"
+            - "15672:15672"
+            - "6379:6379"     # Redis endpoint cho app (SignalR)
+            - "5000:5000"    # HAProxy -> SignalR public endpoint (YARP will forward to HAProxy)
+        environment:
+            FRONTEND_PORT : 5672
+            BACKENDS: "rabbitmq1:5672 rabbitmq2:5672 rabbitmq3:5672"
+            DNS_ENABLED: "true"
+            LOG_LEVEL: "info"
+
+    rabbitmq1:
+        build:
+            context: ./rabbitmq
+            dockerfile: Dockerfile
+        container_name: rabbitmq1
+        hostname: rabbitmq1
+        environment:
+            RABBITMQ_ERLANG_COOKIE: cookie
+            RABBITMQ_DEFAULT_USER: admin
+            RABBITMQ_DEFAULT_PASS: admin
+        ports:
+            - 15673:15672
+
+    rabbitmq2:
+        build:
+            context: ./rabbitmq
+            dockerfile: Dockerfile
+        container_name: rabbitmq2
+        hostname: rabbitmq2
+        environment:
+            RABBITMQ_ERLANG_COOKIE: cookie
+            RABBITMQ_DEFAULT_USER: admin
+            RABBITMQ_DEFAULT_PASS: admin
+        ports:
+            - 15674:15672
+
+    rabbitmq3:
+        build:
+            context: ./rabbitmq
+            dockerfile: Dockerfile
+        container_name: rabbitmq3
+        hostname: rabbitmq3
+        environment:
+            RABBITMQ_ERLANG_COOKIE: cookie
+            RABBITMQ_DEFAULT_USER: admin
+            RABBITMQ_DEFAULT_PASS: admin
+        ports:
+            - 15675:15672
+    
+      # ================== REDIS CLUSTER + SENTINEL ==================
+    redis1:
+        image: redis:7.2-alpine
+        container_name: redis1
+        hostname: redis1
+        command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+        volumes:
+          - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
+          - ./data/redis1:/data
+        networks:
+          - default
+
+    redis2:
+        image: redis:7.2-alpine
+        container_name: redis2
+        hostname: redis2
+        command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--replicaof", "redis1", "6379"]
+        volumes:
+          - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
+          - ./data/redis2:/data
+        networks:
+          - default
+        depends_on:
+          - redis1
+
+    redis3:
+        image: redis:7.2-alpine
+        container_name: redis3
+        hostname: redis3
+        command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--replicaof", "redis1", "6379"]
+        volumes:
+          - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
+          - ./data/redis3:/data
+        networks:
+          - default
+        depends_on:
+          - redis1
+
+    sentinel1:
+        image: redis:7.2-alpine
+        container_name: sentinel1
+        hostname: sentinel1
+        command: ["redis-sentinel", "/usr/local/etc/redis/sentinel.conf"]
+        volumes:
+          - ./redis/sentinel1:/usr/local/etc/redis
+        networks:
+          - default
+        depends_on:
+          - redis1
+          - redis2
+          - redis3
+
+    sentinel2:
+        image: redis:7.2-alpine
+        container_name: sentinel2
+        hostname: sentinel2
+        command: ["redis-sentinel", "/usr/local/etc/redis/sentinel.conf"]
+        volumes:
+          - ./redis/sentinel2:/usr/local/etc/redis
+        networks:
+          - default
+        depends_on:
+          - redis1
+
+    sentinel3:
+        image: redis:7.2-alpine
+        container_name: sentinel3
+        hostname: sentinel3
+        command: ["redis-sentinel", "/usr/local/etc/redis/sentinel.conf"]
+        volumes:
+          - ./redis/sentinel3:/usr/local/etc/redis
+        networks:
+          - default
+        depends_on:
+          - redis1
+          
+    # ============= SignalR Service =============
+    signalr1:
+        build:
+          context: ./signalrservice
+          dockerfile: Dockerfile
+        container_name: signalr1
+        hostname: signalr1
+        environment:
+          - ASPNETCORE_URLS=http://+:5000
+          - REDIS_CONNECTION=redis1:6379
+        depends_on:
+          - redis1
+        ports:
+          - 5001:5000
+
+    signalr2:
+        build:
+          context: ./signalrservice
+          dockerfile: Dockerfile
+        container_name: signalr2
+        hostname: signalr2
+        environment:
+          - ASPNETCORE_URLS=http://+:5000
+          - REDIS_CONNECTION=redis1:6379
+        depends_on:
+          - redis1
+        ports:
+          - 5002:5000
+          
+    gateway1:
+        build:
+          context: ./gateway
+          dockerfile: Dockerfile
+        container_name: gateway1
+        hostname: gateway1
+        depends_on:
+          - haproxy   # haproxy phục vụ signalr backend
+        ports:
+          - "8080:80"  # truy cập gateway node 1 từ host
+
+    gateway2:
+        build:
+          context: ./gateway
+          dockerfile: Dockerfile
+        container_name: gateway2
+        hostname: gateway2
+        environment:
+          - ASPNETCORE_ENVIRONMENT=Development
+        depends_on:
+          - haproxy
+        ports:
+          - "8081:80"  # truy cập gateway node 2 từ host
